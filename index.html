@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Prototype pollution XSS demo</title>
+    <link rel="stylesheet" href="./style.css" />
+    <link rel="icon" href="./assets/pollution-favicon.png" type="image/png" />
+    <script type="module" src="./script.js"></script>
+  </head>
+  <body>
+    <header class="page-header">
+      <h1 class="site-title">The FooBar Times</h1>
+    </header>
+    <dialog id="error-modal">
+      <form class="modal-content" method="dialog">
+        <p>Your message contains unsafe markup!</p>
+        <p>Here is the list of allowed tags:</p>
+        <code id="modal-tag-list"></code>
+        <p>For the list of allowed attributes, check:</p>
+        <a
+          href="https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html#safe-sinks"
+          target="_blank"
+          >Safe HTML Attributes</a
+        >
+        <button id="close-modal">OK</button>
+      </form>
+    </dialog>
+    <div class="body-container">
+      <div class="body-responsive">
+        <section class="article">
+          <h1>Prototype Pollution Exploitation in the Wild: A Case Study</h1>
+          <p>
+            Safety is hard to get right. Many developers choose to offload their
+            security concerns to specialized third-party services (Auth0,
+            sanitization libraries, etc.) to make their code safer.
+          </p>
+          <p>
+            There are well-known vulnerabilities that most people recognize: SQL
+            injection, XSS, buffer overflows, race conditions.
+          </p>
+          <p>
+            But some are more obscure—such as today's focus: Prototype
+            Pollution.
+          </p>
+          <p>
+            Prototype Pollution is a JavaScript-specific vulnerability that can
+            be triggered by running recursive object-merging functions on
+            unsanitized user input.
+          </p>
+          <p>Here's how it works:</p>
+          <p>
+            Using a special key, <code>__proto__</code>, an attacker can modify
+            the prototype of JavaScript objects at runtime.
+          </p>
+          <pre><code class="example-code"><span class="hljs-keyword">function</span> <span class="hljs-title function_">unsafeMerge</span>(<span class="hljs-params">target, source</span>) {
+  <span class="hljs-keyword">for</span> (<span class="hljs-keyword">const</span> attr <span class="hljs-keyword">in</span> source) {
+    <span class="hljs-keyword">if</span> (<span class="hljs-keyword">typeof</span> target[attr] === <span class="hljs-string">&quot;object&quot;</span> &amp;&amp; <span class="hljs-keyword">typeof</span> source[attr] === <span class="hljs-string">&quot;object&quot;</span>) {
+      <span class="hljs-title function_">unsafeMerge</span>(
+        <span class="hljs-comment">/** <span class="hljs-doctag">@type</span> {<span class="hljs-type">Record&lt;string, unknown&gt;</span>} */</span> (target[attr]),
+        <span class="hljs-comment">/** <span class="hljs-doctag">@type</span> {<span class="hljs-type">Record&lt;string, unknown&gt;</span>} */</span> (source[attr]),
+      );
+    } <span class="hljs-keyword">else</span> {
+      target[attr] = source[attr];
+    }
+  }
+}</code></pre>
+          <p>
+            When the merge function is called, if it encounters the special
+            <code>__proto__</code> key, JavaScript won't add it as a normal
+            property. Because <code>target.__proto__</code> is a reference to
+            the prototype object, the function recurses and ends up modifying
+            the prototype instead of the target!
+          </p>
+          <p>
+            This allows the attacker to add or overwrite properties of the
+            prototype object during runtime.
+          </p>
+          <p>
+            Overwriting the <code>.toString</code> method with a primitive value
+            causes method calls to throw exceptions. This is effectively a
+            denial-of-service (DoS) vulnerability.
+          </p>
+          <p>
+            Even scarier is the possibility for an attacker to add default
+            properties to all objects:
+          </p>
+          <pre><code class="example-code"><span class="hljs-keyword">const</span> containsAllowedTagsOnly = tagNames.<span class="hljs-title function_">every</span>(
+  <span class="hljs-function">(<span class="hljs-params">tag</span>) =&gt;</span> <span class="hljs-variable constant_">TAG_ALLOWLIST</span>[tag] === <span class="hljs-literal">true</span>, <span class="hljs-comment">//Prototype chain traversal happens here!</span>
+);</code></pre>
+          <p>
+            Here's what happens: JavaScript attempts to access a property on the
+            allowlist object. If the object doesn't contain that key, JavaScript
+            continues up the prototype chain. If the prototype has such a key,
+            its value is returned. This continues until a value is found, or the
+            entire chain is traversed, returning <code>undefined</code>.
+          </p>
+          <p>
+            If the prototype has been polluted, the allowlist is effectively
+            bypassed—without any changes made to the allowlist itself.
+          </p>
+          <pre><code class="example-code"><span class="hljs-keyword">const</span> <span class="hljs-variable constant_">TAG_ALLOWLIST</span> = <span class="hljs-title class_">Object</span>.<span class="hljs-title function_">freeze</span>({
+  <span class="hljs-attr">b</span>: <span class="hljs-literal">true</span>,
+  <span class="hljs-attr">strong</span>: <span class="hljs-literal">true</span>,
+  <span class="hljs-attr">i</span>: <span class="hljs-literal">true</span>,
+  <span class="hljs-attr">em</span>: <span class="hljs-literal">true</span>,
+});</code></pre>
+          <p>
+            Prototype pollution usually results in DoS vulnerabilities. However,
+            it can also pave the way for more serious issues like XSS.
+          </p>
+          <p>
+            Below this article is a special comment section where a limited set
+            of HTML tags and attributes can be used to format text. How neat!
+          </p>
+          <p>
+            As we know, user-supplied HTML is dangerous, so a strict allowlist
+            is used to validate it.
+          </p>
+          <p>
+            The allowlist is enforced both when a message is sent and received,
+            before its content is injected into the page using
+            <code>.innerHTML</code>.
+          </p>
+          <p>
+            If an attacker manages to pollute the prototype in another user's
+            browser tab, they could bypass the allowlist entirely and use an
+            <code>onerror</code> attribute on an image tag to automatically
+            execute a malicious script!
+          </p>
+          <pre><code class="example-code"><span class="html-tag">&lt;<span class="html-name">img</span>
+  <span class="html-attr">src</span>=<span class="html-string">&quot;x&quot;</span>
+  <span class="html-attr">onerror</span>=<span class="html-string">&quot;stealCookies()&quot;</span>
+/&gt;</span></code></pre>
+          <p>
+            To simulate an insecure WebSocket connection, the comment section
+            dispatches and listens for custom DOM events carrying the message
+            payload.
+          </p>
+          <pre><code class="example-code"><span class="hljs-variable language_">document</span>.<span class="hljs-title function_">addEventListener</span>(<span class="hljs-string">&quot;newMessage&quot;</span>, receiveMessage);
+<span class="hljs-comment">/**
+  * <span class="hljs-doctag">@type</span> {<span class="hljs-type">EventListener</span>}
+  * <span class="hljs-doctag">@param</span> {<span class="hljs-type">CustomEvent</span>} <span class="hljs-variable">event</span>
+  */</span>
+<span class="hljs-keyword">function</span> <span class="hljs-title function_">receiveMessage</span>(<span class="hljs-params">event</span>) {
+  <span class="hljs-keyword">try</span> {
+    <span class="hljs-comment">/** <span class="hljs-doctag">@type</span> {<span class="hljs-type">Record&lt;number, Message&gt;</span>} */</span>
+    <span class="hljs-keyword">const</span> messageData = <span class="hljs-title class_">JSON</span>.<span class="hljs-title function_">parse</span>(event.<span class="hljs-property">detail</span>);
+    <span class="hljs-keyword">const</span> isMessageSafe = <span class="hljs-title class_">Object</span>.<span class="hljs-title function_">values</span>(messageData).<span class="hljs-title function_">every</span>(<span class="hljs-function">(<span class="hljs-params">{ message }</span>) =&gt;</span>
+      <span class="hljs-title function_">isHTMLStringSafe</span>(message),
+    );
+    <span class="hljs-keyword">if</span> (isMessageSafe) {
+      <span class="hljs-title function_">unsafeMerge</span>(globalAppState.<span class="hljs-property">messages</span>, messageData); <span class="hljs-comment">//Prototype pollution happens here!</span>
+      <span class="hljs-title function_">renderMessages</span>();
+    }
+  } <span class="hljs-keyword">catch</span> (error) {
+    <span class="hljs-variable language_">console</span>.<span class="hljs-title function_">warn</span>(<span class="hljs-string">&quot;Received incorrect JSON string.&quot;</span>);
+    <span class="hljs-variable language_">console</span>.<span class="hljs-title function_">error</span>(error);
+  }
+}</code></pre>
+          <p>
+            While the HTML content is validated against the allowlist, the
+            structure of the object itself is not. When a malicious payload is
+            merged into the global application state, the prototype is polluted.
+          </p>
+          <pre><code class="example-code">{
+  <span class="hljs-string">&quot;0&quot;</span>: {
+    <span class="hljs-string">&quot;id&quot;</span>: <span class="hljs-number">0</span>,
+    <span class="hljs-string">&quot;senderId&quot;</span>: <span class="hljs-string">&quot;1&quot;</span>,
+    <span class="hljs-string">&quot;senderUsername&quot;</span>: <span class="hljs-string">&quot;bob&quot;</span>,
+    <span class="hljs-string">&quot;dateSent&quot;</span>: <span class="hljs-string">&quot;2025-03-11T09:28:00&quot;</span>,
+    <span class="hljs-string">&quot;message&quot;</span>: <span class="hljs-string">&quot;Prototype Pollution&quot;</span>,
+    <span class="hljs-string">&quot;__proto__&quot;</span>: {
+      <span class="hljs-string">&quot;img&quot;</span>: <span class="hljs-literal">true</span>,
+      <span class="hljs-string">&quot;onerror&quot;</span>: <span class="hljs-literal">true</span>,
+      <span class="hljs-string">&quot;src&quot;</span>: <span class="hljs-literal">true</span>
+    }
+  }
+}</code></pre>
+          <p>
+            Here's how to simulate sending a malicious payload to the fake
+            WebSocket API from the console:
+          </p>
+          <pre><code class="example-code"><span class="hljs-keyword">const</span> prototypePollutionPayload =
+  <span class="hljs-string">&#x27;{&quot;0&quot;: {&quot;id&quot;: 0,&quot;senderId&quot;: &quot;1&quot;,&quot;senderUsername&quot;: &quot;bob&quot;,&quot;dateSent&quot;: &quot;2025-03-11T09:28:00&quot;,&quot;message&quot;: &quot;Prototype Pollution&quot;,&quot;__proto__&quot;: { &quot;img&quot;: true, &quot;onerror&quot;: true, &quot;src&quot;: true }}}&#x27;</span>;
+<span class="hljs-variable language_">document</span>.<span class="hljs-title function_">dispatchEvent</span>(
+  <span class="hljs-keyword">new</span> <span class="hljs-title class_">CustomEvent</span>(<span class="hljs-string">&quot;newMessage&quot;</span>, {
+    <span class="hljs-attr">detail</span>: prototypePollutionPayload,
+  }),
+);</code></pre>
+          <p>
+            Once the prototype is polluted, the allowlist check is bypassed.
+            Arbitrary, self-executing scripts can now be sent to all online
+            users who received the malicious message.
+          </p>
+          <pre><code class="example-code"><span class="html-tag">&lt;<span class="html-name">img</span>
+  <span class="html-attr">src</span>=<span class="html-string">&quot;x&quot;</span>
+  <span class="html-attr">onerror</span>=<span class="html-string">&quot;alert(&#x27;Hacked!\nI just retrieved your authToken:\n&#x27;+localStorage.getItem(&#x27;authToken&#x27;))&quot;</span>
+/&gt;</span></code></pre>
+          <p>So how can we prevent this?</p>
+          <p>
+            Always validate user input before doing anything else with it. This
+            applies not only to prototype pollution but to all forms of input
+            handling.
+          </p>
+          <p>
+            Use up-to-date utility libraries with well-tested functions that
+            already protect against this vulnerability.
+          </p>
+          <p>
+            Consider using <code>Object.create(null)</code> to create objects
+            without prototypes.
+          </p>
+          <p>
+            You can also use <code>Set</code> and <code>Map</code>, which don't
+            suffer from prototype inheritance.
+          </p>
+          <p>
+            Feel free to inspect this page's source—it's unminified and
+            intentionally vulnerable. Use it as an example of what
+            <em>not</em> to do.
+          </p>
+          <p>Read more about prototype pollution here:</p>
+          <ul>
+            <li>
+              <a
+                href="https://learn.snyk.io/lesson/prototype-pollution/?ecosystem=javascript"
+                >learn.snyk.io</a
+              >
+            </li>
+            <li>
+              <a href="https://portswigger.net/web-security/prototype-pollution"
+                >portswigger.net</a
+              >
+            </li>
+            <li>
+              <a
+                href="https://research.securitum.com/prototype-pollution-and-bypassing-client-side-html-sanitizers/"
+                >research.securitum.com</a
+              >
+            </li>
+          </ul>
+        </section>
+        <h2>Comments Section</h2>
+        <section id="comment-section"></section>
+        <section class="new-message">
+          <div class="message" id="new-message-container">
+            <div class="message-left">
+              <h3 class="username message-header">john_doe</h3>
+              <div class="message-body profile-pic-container">
+                <img
+                  class="profile-picture"
+                  src="./assets/profile-pictures/john_doe.png"
+                />
+              </div>
+            </div>
+            <div class="message-right">
+              <time class="message-header">Just Now</time>
+              <div class="message-body">
+                <form id="new-message-form" method="post">
+                  <textarea
+                    id="new-comment"
+                    placeholder="Write your message here..."
+                    rows="5"
+                  ></textarea>
+                  <div class="form-actions">
+                    <button type="submit">Post Message</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </body>
+</html>

