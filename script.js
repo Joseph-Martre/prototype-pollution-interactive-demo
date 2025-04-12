@@ -325,18 +325,15 @@ function isHTMLStringSafe(string) {
   const foundElements = stringDOMParser
     .parseFromString(string, "text/html")
     .querySelectorAll("*");
-  /** @type {string[]} */
-  const tagNames = [];
-  /** @type {string[]} */
-  const attributes = [];
-  foundElements.forEach((element) => {
-    tagNames.push(element.tagName.toLowerCase());
-    if (element.hasAttributes()) {
-      for (const attr of element.attributes) {
-        attributes.push(attr.name);
-      }
-    }
-  });
+
+  const tagNames = Array.from(foundElements, (element) =>
+    element.tagName.toLowerCase(),
+  );
+  const attributes = Array.from(foundElements, (element) =>
+    element.hasAttributes()
+      ? [...element.attributes].map((attribute) => attribute.name)
+      : [],
+  ).flat();
   const containsAllowedTagsOnly = tagNames.every(
     (tag) => TAG_ALLOWLIST[tag] === true, //Prototype chain traversal happens here!
   );
